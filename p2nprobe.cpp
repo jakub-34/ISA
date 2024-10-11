@@ -18,6 +18,11 @@
 // Map for storing flow statistics
 std::map <FlowKey, FlowStats> flow_map;
 
+// Global variables
+uint32_t flow_sequence = 0;
+NetFlowV5Record records[30];
+int record_count = 0;
+
 
 // Function to send NetFlow messages
 void send_netflow(int sock, struct sockaddr_in *collector_addr, NetFlowV5Header *header, NetFlowV5Record *records, int record_count){
@@ -112,7 +117,7 @@ int check_pcap_file_path(const char *arg){
 }
 
 
-void process_tcp_packet(const struct pcap_pkthdr *header, const u_char *packet){
+void process_tcp_packet(const struct pcap_pkthdr *header, const u_char *packet, int sock, struct sockaddr_in *collector_addr, int active_timeout, int inactive_timeout){
     struct ip *iph = (struct ip *)(packet + 14);
     struct tcphdr *tcph = (struct tcphdr *)(packet + 14 + iph->ip_hl * 4);
 
@@ -123,8 +128,35 @@ void process_tcp_packet(const struct pcap_pkthdr *header, const u_char *packet){
     flow_key.dst_port = ntohs(tcph->th_dport);
 
     // Find or create new flow
-    if(flow_map.find(flow_key) == flow_map.end()){
-        // New flow
+    struct timeval current_time;
+    gettimeofday(&current_time, NULL);
+
+    // Flow already exists - update statistics
+    if(flow_map.find(flow_key) != flow_map.end()){
+        FlowStats &flow = flow_map[flow_key];
+
+        // Check for active timeout
+        if((current_time.tv_sec - flow.start_time.tv_sec) >= active_timeout){
+            records[record_count++] = create_netflow_record(flow_key, flow);
+            flow_map.erase(flow_key);
+        }
+
+        // Check for inactive timeout
+        else if((current_time.tv_sec - flow.end_time.tv_sec) >= inactive_timeout){
+            records[record_count++] = create_netflow_record(flow_key, flow);
+            flow_map.erase(flow_key);
+        }
+
+        // Update flow statistics
+        else{
+            flow.packet_count++;
+            flow.byte_count += header->len;
+            flow.end_time = header->ts;
+        }
+    }
+
+    // New flow
+    else{
         FlowStats new_flow;
         new_flow.packet_count = 1;
         new_flow.byte_count = header->len;
@@ -132,30 +164,38 @@ void process_tcp_packet(const struct pcap_pkthdr *header, const u_char *packet){
         new_flow.end_time = header->ts;
         flow_map[flow_key] = new_flow;
     }
-    else{
-        // Already existing flow
-        FlowStats &flow = flow_map[flow_key];
-        flow.packet_count++;
-        flow.byte_count += header->len;
-        flow.end_time = header->ts;
+
+    // Send NetFlow message
+    if(record_count == 30){
+        NetFlowV5Header header = create_netflow_header(record_count, flow_sequence);
+        send_netflow(sock, collector_addr, &header, records, record_count);
+        flow_sequence++;
+        record_count = 0;
     }
 
-    printf("TCP Packet: %u -> %u, Packet count: %d, Byte count: %d\n",
-           flow_key.src_ip, flow_key.dst_ip, flow_map[flow_key].packet_count, flow_map[flow_key].byte_count);
+    // Debug prints
+    char src_ip_str[INET_ADDRSTRLEN];
+    char dst_ip_str[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &(flow_key.src_ip), src_ip_str, INET_ADDRSTRLEN);
+    inet_ntop(AF_INET, &(flow_key.dst_ip), dst_ip_str, INET_ADDRSTRLEN);
+
+    printf("TCP Packet: %s -> %s, Packet count: %d, Byte count: %d\n",
+           src_ip_str, dst_ip_str, flow_map[flow_key].packet_count, flow_map[flow_key].byte_count);
+
 }
 
 
 // Function to filter only TCP packets
-void process_packet(const struct pcap_pkthdr *header, const u_char *packet){
+void process_packet(const struct pcap_pkthdr *header, const u_char *packet, int sock, struct sockaddr_in *collector_addr, int active_timeout, int inactive_timeout){
     struct ip *iph = (struct ip *)(packet + 14);
     if(iph->ip_p == IPPROTO_TCP){
-        process_tcp_packet(header, packet);
+        process_tcp_packet(header, packet, sock, collector_addr, active_timeout, inactive_timeout);
     }
 }
 
 
 // Function to process pcap file
-int read_pcap_file(const char *pcap_file_path){
+int read_pcap_file(const char *pcap_file_path, int sock, struct sockaddr_in *collector_addr, int active_timeout, int inactive_timeout){
     // Open pcap file
     char errbuf[PCAP_ERRBUF_SIZE];
     pcap_t *handle = pcap_open_offline(pcap_file_path, errbuf);
@@ -168,10 +208,19 @@ int read_pcap_file(const char *pcap_file_path){
     const u_char *packet;
     struct pcap_pkthdr header;
     while((packet = pcap_next(handle, &header)) != NULL){
-        process_packet(&header, packet);
+        process_packet(&header, packet, sock, collector_addr, active_timeout, inactive_timeout);
     }
 
     pcap_close(handle);
+
+    // Send remaining NetFlow records
+    if(record_count > 0){
+        NetFlowV5Header header = create_netflow_header(record_count, flow_sequence);
+        send_netflow(sock, collector_addr, &header, records, record_count);
+        flow_sequence++;
+        record_count = 0;
+    }
+
     return 0;
 }
 
@@ -229,11 +278,27 @@ int main(int argc, char *argv[]){
         return 1;
     }
 
-
-    // Read pcap file
-    if(read_pcap_file(pcap_file_path) != 0){
+    // Set up UDP socket and collector address
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if(sock < 0){
+        fprintf(stderr, "Error creating socket\n");
         return 1;
     }
 
+    struct sockaddr_in collector_addr;
+    memset(&collector_addr, 0, sizeof(collector_addr));
+    collector_addr.sin_family = AF_INET;
+    collector_addr.sin_port = htons(atoi(port));
+    if(inet_pton(AF_INET, host, &collector_addr.sin_addr) <= 0){
+        fprintf(stderr, "Invalid address: %s\n", host);
+        return 1;
+    }
+
+    // Read pcap file
+    if(read_pcap_file(pcap_file_path, sock, &collector_addr, active_timeout, inactive_timeout) != 0){
+        return 1;
+    }
+
+    close(sock);
     return 0;
 }
