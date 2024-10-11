@@ -128,8 +128,7 @@ void process_tcp_packet(const struct pcap_pkthdr *header, const u_char *packet, 
     flow_key.dst_port = ntohs(tcph->th_dport);
 
     // Find or create new flow
-    struct timeval current_time;
-    gettimeofday(&current_time, NULL);
+    struct timeval current_time = header->ts;
 
     // Flow already exists - update statistics
     if(flow_map.find(flow_key) != flow_map.end()){
@@ -150,8 +149,24 @@ void process_tcp_packet(const struct pcap_pkthdr *header, const u_char *packet, 
         // Update flow statistics
         else{
             flow.packet_count++;
-            flow.byte_count += header->len;
+            flow.byte_count += header->len -14;
             flow.end_time = header->ts;
+
+            // Remove old record from records[] if exists
+            for (int i = 0; i < record_count; i++) {
+                if (records[i].src_ip == flow_key.src_ip && records[i].dst_ip == flow_key.dst_ip &&
+                    records[i].src_port == htons(flow_key.src_port) && records[i].dst_port == htons(flow_key.dst_port)) {
+                    // Shift the records to remove the old record
+                    for (int j = i; j < record_count - 1; j++) {
+                        records[j] = records[j + 1];
+                    }
+                    record_count--;  // Decrease record count after removing
+                    break;
+                }
+            }
+
+            // Create new NetFlow record for updated flow
+            records[record_count++] = create_netflow_record(flow_key, flow);
         }
     }
 
@@ -159,10 +174,13 @@ void process_tcp_packet(const struct pcap_pkthdr *header, const u_char *packet, 
     else{
         FlowStats new_flow;
         new_flow.packet_count = 1;
-        new_flow.byte_count = header->len;
+        new_flow.byte_count = header->len -14;
         new_flow.start_time = header->ts;
         new_flow.end_time = header->ts;
         flow_map[flow_key] = new_flow;
+
+        // Create NetFlow record for new flow
+        records[record_count++] = create_netflow_record(flow_key, new_flow);
     }
 
     // Send NetFlow message
@@ -172,16 +190,6 @@ void process_tcp_packet(const struct pcap_pkthdr *header, const u_char *packet, 
         flow_sequence++;
         record_count = 0;
     }
-
-    // Debug prints
-    char src_ip_str[INET_ADDRSTRLEN];
-    char dst_ip_str[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &(flow_key.src_ip), src_ip_str, INET_ADDRSTRLEN);
-    inet_ntop(AF_INET, &(flow_key.dst_ip), dst_ip_str, INET_ADDRSTRLEN);
-
-    printf("TCP Packet: %s -> %s, Packet count: %d, Byte count: %d\n",
-           src_ip_str, dst_ip_str, flow_map[flow_key].packet_count, flow_map[flow_key].byte_count);
-
 }
 
 
