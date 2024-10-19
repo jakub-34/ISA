@@ -1,3 +1,5 @@
+// Author: Jakub Hrdlička, xhrdli18
+
 #ifndef NETFLOW_V5_STRUCTURE_H
 #define NETFLOW_V5_STRUCTURE_H
 
@@ -19,8 +21,8 @@ struct NetFlowV5Header{
 
 // Structure for NetFlow v5 flow record
 struct NetFlowV5Record{
-    uint32_t src_ip;      // Source IP address
-    uint32_t dst_ip;      // Destination IP address
+    uint32_t src_ip;        // Source IP address
+    uint32_t dst_ip;        // Destination IP address
     uint32_t next_hop;      // IP address of next hop router
     uint16_t input;         // SNMP index of input interface
     uint16_t output;        // SNMP index of output interface
@@ -32,7 +34,7 @@ struct NetFlowV5Record{
     uint16_t dst_port;      // Destination port
     uint8_t pad1;           // Padding
     uint8_t tcp_flags;      // TCP flags
-    uint8_t protocol;           // IP protocol
+    uint8_t protocol;       // IP protocol
     uint8_t tos;            // IP type of service
     uint16_t src_as;        // Autonomous system number of the source
     uint16_t dst_as;        // Autonomous system number of the destination

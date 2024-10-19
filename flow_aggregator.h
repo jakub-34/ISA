@@ -1,3 +1,5 @@
+// Author: Jakub Hrdlička, xhrdli18
+
 #ifndef FLOW_AGGREGATOR_H
 #define FLOW_AGGREGATOR_H
 
