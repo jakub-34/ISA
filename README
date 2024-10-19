@@ -1,0 +1,20 @@
+Author: Jakub Hrdlička
+login: xhrdli18
+19.10.2024
+
+Popis:
+    Program p2nprobe slúži na extrahovanie informácií o tokoch z pcap súboru, a odosielanie týchto informácií na kolektor vo formáte NetFlow v5. Program spracováva iba TCP toky, a spracované dáta agreguje do tokov a odosiela na kolektor pomocou UDP správ.
+
+Príklady spustenia:
+    ./p2nprobe  localhost:2055 muj_pcap.pcap -a 5 -i 30
+    ./p2nprobe localhost:2055 muj_pcap.pcap
+
+    Kde localhost:2055 je adresa a port kolektora, muj_pcap.pcap je pcap súbor, -a je čas pre active timeout, a -i je čas pre inactive timeout.
+
+Zoznam odovzdaných súborov:
+    flow_aggregator.h
+    netflow_v5_structure.h
+    p2nprobe.cpp
+    makefile
+    README
+    manual.pdf
